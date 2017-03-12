@@ -209,20 +209,26 @@ func readCsv(app *kintone.App, _reader io.Reader) error {
 				setRecordUpdatable(record, columns)
 				recordsUpdate = append(recordsUpdate, kintone.NewRecordWithId(id, record))
 				if len(recordsUpdate) >= IMPORT_ROW_LIMIT {
-					update(app, recordsUpdate[:], keyField)
+					err = upsert(app, recordsUpdate[:], keyField)
+					if err != nil {
+						return err
+					}
 					recordsUpdate = make([]*kintone.Record, 0, IMPORT_ROW_LIMIT)
 				}
 			} else {
 				recordsInsert = append(recordsInsert, kintone.NewRecord(record))
 				if len(recordsInsert) >= IMPORT_ROW_LIMIT {
-					insert(app, recordsInsert[:])
+					err = insert(app, recordsInsert[:])
+					if err != nil {
+						return err
+					}
 					recordsInsert = make([]*kintone.Record, 0, IMPORT_ROW_LIMIT)
 				}
 			}
 		}
 	}
 	if len(recordsUpdate) > 0 {
-		err = update(app, recordsUpdate[:], keyField)
+		err = upsert(app, recordsUpdate[:], keyField)
 		if err != nil {
 			return err
 		}
@@ -306,6 +312,95 @@ func update(app *kintone.App, recs []*kintone.Record, keyField string)  error {
 		err = app.UpdateRecords(recs, true)
 	}
 	return err
+}
+
+func upsert(app *kintone.App, recs []*kintone.Record, keyField string) error {
+	// データのうちkintoneに存在しないデータをrecordsInsertに、存在するものをrecordsUpdateに詰めなおす
+	recordsInsert, recordsUpdate, err := splitRecordsForUpsert(app, recs, keyField)
+	if err != nil {
+		return err
+	}
+	if len(recordsUpdate) > 0 {
+		err = update(app, recordsUpdate[:], keyField)
+		if err != nil {
+			return err
+		}
+	}
+	if len(recordsInsert) > 0 {
+		err = insert(app, recordsInsert[:])
+		if err != nil {
+			return err
+		}
+	}
+	return err
+}
+
+func splitRecordsForUpsert(app *kintone.App, recs []*kintone.Record, keyField string) ([]*kintone.Record, []*kintone.Record, error) {
+	r := make([]string, 0)
+
+	if keyField == "" {
+		keyField = "$Id"
+	}
+	for _, record := range recs {
+		r = append(r, toString(record.Fields[keyField], ""))
+	}
+	query := keyField + " in (" + strings.Join(r, ",") + ")"
+	fmt.Println(query)
+	records, err := app.GetRecords([]string{keyField}, query)
+	if err != nil {
+		return nil, nil, err
+	}
+	recordsInsert := make([]*kintone.Record, 0, IMPORT_ROW_LIMIT)
+	recordsUpdate := make([]*kintone.Record, 0, IMPORT_ROW_LIMIT)
+	for _, rec := range recs {
+		val := toString(rec.Fields[keyField], "")
+		exists := checkExist(val, records, keyField)
+		if exists {
+			recordsUpdate = append(recordsUpdate, rec)
+		} else {
+			recordsInsert = append(recordsInsert, rec)
+		}
+	}
+	return recordsInsert, recordsUpdate, nil
+}
+
+func checkExist(val string, recs []*kintone.Record, keyField string) bool {
+	for _, rec := range recs {
+		if val == toString(rec.Fields[keyField], "") {
+			return true
+		}
+	}
+	return false
+}
+
+func getQueryPrefix(f interface{}) string {
+	switch f.(type) {
+	case kintone.SingleLineTextField:
+		return "'"
+	case kintone.DecimalField:
+		return ""
+	}
+	return ""
+}
+
+func getQuerySurfix(f interface{}) string {
+	switch f.(type) {
+	case kintone.SingleLineTextField:
+		return "'"
+	case kintone.DecimalField:
+		return ""
+	}
+	return ""
+}
+
+func getQueryDelimiter(f interface{}) string {
+	switch f.(type) {
+	case kintone.SingleLineTextField:
+		return "','"
+	case kintone.DecimalField:
+		return ","
+	}
+	return ""
 }
 
 // delete specific records
