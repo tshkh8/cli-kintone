@@ -315,7 +315,6 @@ func update(app *kintone.App, recs []*kintone.Record, keyField string)  error {
 }
 
 func upsert(app *kintone.App, recs []*kintone.Record, keyField string) error {
-	// データのうちkintoneに存在しないデータをrecordsInsertに、存在するものをrecordsUpdateに詰めなおす
 	recordsInsert, recordsUpdate, err := splitRecordsForUpsert(app, recs, keyField)
 	if err != nil {
 		return err
@@ -335,27 +334,27 @@ func upsert(app *kintone.App, recs []*kintone.Record, keyField string) error {
 	return err
 }
 
+// for upsert, recs was splitted to insert records and update records.
 func splitRecordsForUpsert(app *kintone.App, recs []*kintone.Record, keyField string) ([]*kintone.Record, []*kintone.Record, error) {
-	r := make([]string, 0)
-
 	if keyField == "" {
 		keyField = "$Id"
 	}
+	keyFieldValues := make([]string, 0)
 	for _, record := range recs {
-		r = append(r, toString(record.Fields[keyField], ""))
+		keyFieldValues = append(keyFieldValues, toString(record.Fields[keyField], ""))
 	}
-	query := keyField + " in (" + strings.Join(r, ",") + ")"
-	fmt.Println(query)
+
+	query := keyField + " in (" + strings.Join(keyFieldValues, ",") + ")"
 	records, err := app.GetRecords([]string{keyField}, query)
 	if err != nil {
 		return nil, nil, err
 	}
+
 	recordsInsert := make([]*kintone.Record, 0, IMPORT_ROW_LIMIT)
 	recordsUpdate := make([]*kintone.Record, 0, IMPORT_ROW_LIMIT)
 	for _, rec := range recs {
 		val := toString(rec.Fields[keyField], "")
-		exists := checkExist(val, records, keyField)
-		if exists {
+		if isExistsInKintone(val, records, keyField) {
 			recordsUpdate = append(recordsUpdate, rec)
 		} else {
 			recordsInsert = append(recordsInsert, rec)
@@ -364,43 +363,14 @@ func splitRecordsForUpsert(app *kintone.App, recs []*kintone.Record, keyField st
 	return recordsInsert, recordsUpdate, nil
 }
 
-func checkExist(val string, recs []*kintone.Record, keyField string) bool {
+// check the keyField value exists kintone records or not.
+func isExistsInKintone(val string, recs []*kintone.Record, keyField string) bool {
 	for _, rec := range recs {
 		if val == toString(rec.Fields[keyField], "") {
 			return true
 		}
 	}
 	return false
-}
-
-func getQueryPrefix(f interface{}) string {
-	switch f.(type) {
-	case kintone.SingleLineTextField:
-		return "'"
-	case kintone.DecimalField:
-		return ""
-	}
-	return ""
-}
-
-func getQuerySurfix(f interface{}) string {
-	switch f.(type) {
-	case kintone.SingleLineTextField:
-		return "'"
-	case kintone.DecimalField:
-		return ""
-	}
-	return ""
-}
-
-func getQueryDelimiter(f interface{}) string {
-	switch f.(type) {
-	case kintone.SingleLineTextField:
-		return "','"
-	case kintone.DecimalField:
-		return ","
-	}
-	return ""
 }
 
 // delete specific records
